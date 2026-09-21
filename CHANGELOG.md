@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.3] — 2026-09-21
+
+### Added
+- `tools/torch` — Steam-console bridge: live watcher, session replay, system
+  forensics, and seed handoffs into `~/.torches/inbox/` for agents (hermes /
+  opencode). Ships with `torch-watch.service` (systemd user) and a torch pane in
+  `steam-console-agents`.
+
+### Changed
+- `docs/BUGTRACKER.md` ST-001b: console evidence of **19.84 s frame gap at the
+  intro→gameplay handoff** and repeated 8 s gaps before silent window death —
+  render-thread knot at mission-load transition; 0-byte breakpad asserts in
+  `/tmp/dumps` confirm a native assert that never materialized a dump.
+
 ## [0.1.2] — 2026-09-21
 
 ### Added

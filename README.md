@@ -64,6 +64,7 @@ tools/verify-launch.sh         # boots the game in its own prefix, reports PASS/
 | `config/` | Optimized `Engine.ini`, `Scalability.ini`, `GameUserSettings.ini` templates + install/revert scripts |
 | `tools/verify-launch.sh` | Automated launch smoke test (A/B your settings) |
 | `tools/collect-crash-info.sh` | Bundle your crash evidence for bug reports |
+| `tools/torch` | Steam-console bridge: live game-session watcher, console replay, system forensics, agent handoffs (`~/.torches/inbox/`) |
 | `docs/DIAGNOSIS.md` | Full forensic write-up (engine, crash dump, DXVK behavior) |
 | `docs/BUGTRACKER.md` | Catalogued community + verified issues with status and workarounds |
 

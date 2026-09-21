@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+# torch — Steam-console bridge for Sword Tale: Lost Excalibur (App 3305630)
+#
+# A CLI messenger that rides the Steam console log, captures everything the
+# game says, wraps it in forensics at game exit, and hands the bundle to the
+# mage (opencode/other agents) through a shared inbox.
+#
+#   torch watch                 # live watcher (tail the Steam console, session capture)
+#   torch snapshot [label]      # capture forensics + last session slice NOW
+#   torch replay [label]        # reconstruct the most recent session from the log
+#   torch handoff [-s ID] [note]  # seal latest session as a torch into the inbox
+#   torch tell <message>        # drop a quick note to the mage
+#   torch inbox                 # list torches awaiting pickup
+#   torch read <file>           # read a torch from the inbox
+#   torch status                # sessions + inbox state
+#
+# Env: TORCH_APPID, TORCH_ROOT, STEAM_ROOT, ENGINE_LOG (defaults below).
+set -u
+
+APPID="${TORCH_APPID:-3305630}"
+STEAM_ROOT="${STEAM_ROOT:-$HOME/.local/share/Steam}"
+CONSOLE="$STEAM_ROOT/logs/console-linux.txt"
+ROOT="${TORCH_ROOT:-$HOME/.torches}"
+SESS="$ROOT/sessions"
+INBOX="$ROOT/inbox"
+ARCHIVE="$ROOT/archive"
+GAME_NAME="SwordTale"
+PREFIX="$STEAM_ROOT/steamapps/compatdata/$APPID"
+GAME_SAVED="$PREFIX/pfx/drive_c/users/steamuser/AppData/Local/$GAME_NAME/Saved"
+ENGINE_LOG="${ENGINE_LOG:-/tmp/swordtale-diag.log}"
+REC_OPTIONS='DXVK_FILTER_DEVICE_NAME="GeForce RTX 3050" DXVK_CONFIG="dxvk.numCompilerThreads=4,dxvk.maxFrameLatency=2,dxvk.enableGraphicsPipelineLibrary=True,dxvk.shrinkNvidiaHvvHeap=True" PROTON_ENABLE_NVAPI=1 PROTON_LOG=1 PROTON_LOG_DIR=/tmp/protonlog gamemoderun %command% -nomovie -novsync -malloc=system -log -abslog="Z:/tmp/swordtale-diag.log" -stdout'
+
+mkdir -p "$SESS" "$INBOX" "$ARCHIVE"
+
+log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+sid()  { date '+%Y%m%d-%H%M%S'; }
+
+# ---------------------------------------------------------------- forensics
+# $1 = session dir. Collects system state, kernel whispers, engine log, dumps.
+collect_forensics() {
+    local dir="$1"
+    {
+        echo "# System snapshot ($(date '+%Y-%m-%d %H:%M:%S'))"
+        echo
+        echo "## Memory"
+        free -h 2>/dev/null || true
+        echo
+        echo "## Top RAM hogs"
+        ps aux --sort=-rss 2>/dev/null | head -6 | awk '{printf "%-8s %6sMB  %s\n", $1, int($6/1024), substr($0, index($0,$11), 70)}'
+        echo
+        echo "## Kernel whispers (NVRM / OOM / segfault / Xid)"
+        (journalctl -k -n 3000 2>/dev/null || dmesg -T 2>/dev/null) \
+            | grep -aiE "NVRM|oom|killed process|segfault|Xid|traps" | tail -20
+        echo
+        echo "## Shader cache (warm-up progress)"
+        du -sh "$STEAM_ROOT/steamapps/shadercache/$APPID/" 2>/dev/null || echo "no shader cache yet"
+        echo
+        echo "## Recommended capture launch options"
+        echo "$REC_OPTIONS"
+    } > "$dir/system.txt" 2>/dev/null
+
+    # engine log (forced via -abslog, or the game's own path)
+    for src in "$ENGINE_LOG" "$GAME_SAVED/Logs/$GAME_NAME.log"; do
+        if [ -f "$src" ]; then
+            cp "$src" "$dir/engine.log" 2>/dev/null && log "engine log captured from $src"
+            break
+        fi
+    done
+
+    # newest crash artifact, if any
+    local crash
+    crash=$(ls -dt "$GAME_SAVED"/Crashes/UE4CC-* 2>/dev/null | head -1)
+    if [ -n "$crash" ]; then
+        cp -r "$crash" "$dir/crash-dump" 2>/dev/null && log "crash dump captured: $crash"
+    fi
+}
+
+# ---------------------------------------------------------------- sessions
+new_session() {
+    local label="$1" ts
+    ts=$(sid)
+    local dir="$SESS/$ts-$label"
+    mkdir -p "$dir"
+    touch "$dir/started"
+    echo "$dir" > "$ROOT/state-current"
+    echo "$dir"
+}
+
+finalize_session() {
+    local dir="$1" exit_note="$2" dur
+    dur=0
+    [ -f "$dir/started" ] && dur=$(( $(date +%s) - $(stat -c %Y "$dir/started") ))
+    {
+        echo "exit: $exit_note"
+        echo "duration_s: $dur"
+    } > "$dir/exit.txt"
+    log "session ended ($exit_note, ${dur}s) — collecting forensics"
+    collect_forensics "$dir"
+    log "session sealed: $dir"
+    echo "$dir" > "$ROOT/state-last"
+}
+
+# slice = console lines [start_line, end_line) from the rolling log
+emit_slice() {
+    local dir="$1" start="$2" end="$3"
+    if [ -n "$start" ]; then
+        sed -n "${start},${end}p" "$CONSOLE" 2>/dev/null | tail -400 > "$dir/console.slice"
+    else
+        : > "$dir/console.slice"
+    fi
+}
+
+# ---------------------------------------------------------------- watch
+cmd_watch() {
+    if [ ! -f "$CONSOLE" ]; then
+        echo "Steam console log not found: $CONSOLE"
+        echo "Run Steam with: steam -console  (or keep the portal alive)."
+        exit 1
+    fi
+    log "torch watching $CONSOLE for gameID $APPID (Ctrl-C to stop)"
+    local cur="" start_line="" line_no=0 line
+    tail -F -n 0 "$CONSOLE" | while IFS= read -r line; do
+        line_no=$((line_no + 1))
+        if [[ "$line" =~ Adding.*process.*for\ gameID\ $APPID ]]; then
+            cur=$(new_session "auto")
+            start_line=$line_no
+            log "game session started: $cur"
+        fi
+        if [ -n "$cur" ]; then
+            echo "$line" >> "$cur/console.slice"
+        fi
+        if [[ "$line" =~ Removing.*(process|window).*for\ gameID\ $APPID ]] || [[ "$line" =~ Removing.*process.*$APPID ]]; then
+            if [ -n "$cur" ]; then
+                emit_slice "$cur" "$start_line" "$line_no"
+                finalize_session "$cur" "game exited / removed by Steam"
+                cmd_handoff "" "$cur" 2>/dev/null || true
+                cur=""
+            fi
+        fi
+    done
+}
+
+# ---------------------------------------------------------------- replay
+cmd_replay() {
+    local label="${1:-replay}"
+    [ -f "$CONSOLE" ] || { echo "no console log at $CONSOLE"; exit 1; }
+    local last_add last_rem lines
+    last_add=$(grep -an "Adding.*process.*for gameID $APPID" "$CONSOLE" | tail -1 | cut -d: -f1)
+    last_rem=$(grep -an "Removing.*for gameID $APPID" "$CONSOLE" | tail -1 | cut -d: -f1)
+    [ -n "$last_add" ] || { echo "no game sessions found for $APPID in $CONSOLE"; exit 1; }
+    [ -n "$last_rem" ] && [ "$last_rem" -gt "$last_add" ] || last_rem=$(wc -l < "$CONSOLE")
+    local dir
+    dir=$(new_session "$label")
+    emit_slice "$dir" "$last_add" "$last_rem"
+    log "replay session: $dir (lines $last_add..$last_rem)"
+    finalize_session "$dir" "replayed from console log"
+}
+
+# ---------------------------------------------------------------- snapshot
+cmd_snapshot() {
+    local label="${1:-snapshot}"
+    local dir
+    dir=$(new_session "$label")
+    local last_add last_rem lines
+    if [ -f "$CONSOLE" ]; then
+        last_add=$(grep -an "Adding.*process.*for gameID $APPID" "$CONSOLE" | tail -1 | cut -d: -f1)
+        last_rem=$(grep -an "Removing.*for gameID $APPID" "$CONSOLE" | tail -1 | cut -d: -f1)
+        [ -n "$last_add" ] && { [ -n "$last_rem" ] && [ "$last_rem" -gt "$last_add" ] || last_rem=$(wc -l < "$CONSOLE"); emit_slice "$dir" "$last_add" "$last_rem"; }
+    fi
+    finalize_session "$dir" "manual snapshot"
+    echo "session: $dir"
+}
+
+# ---------------------------------------------------------------- handoff
+cmd_handoff() {
+    local note="${1:-}" dir="${2:-}"
+    if [ -z "$dir" ]; then
+        [ -f "$ROOT/state-last" ] && dir=$(cat "$ROOT/state-last")
+    fi
+    [ -n "$dir" ] && [ -d "$dir" ] || { echo "no session available — run 'torch watch' or 'torch snapshot' first"; exit 1; }
+    local ts label
+    ts=$(basename "$dir")
+    label="${ts##*-}"
+    local out="$INBOX/${ts}.torch.md"
+    {
+        echo "# 🧙 Torch — $GAME_NAME session $ts"
+        echo
+        echo "> label: $label"
+        echo "> note: ${note:-—}"
+        echo
+        echo "## Console slice (last 40 lines)"
+        tail -40 "$dir/console.slice" 2>/dev/null || echo "(no slice)"
+        echo
+        echo "## Exit"
+        cat "$dir/exit.txt" 2>/dev/null || echo "(no exit record)"
+        echo
+        echo "## Engine log (last 30 lines)"
+        tail -30 "$dir/engine.log" 2>/dev/null || echo "(no engine log — was the -abslog launch option in place?)"
+        echo
+        echo "## System / kernel"
+        cat "$dir/system.txt" 2>/dev/null || echo "(no system snapshot)"
+        echo
+        echo "---"
+        echo "Hand to the mage: 'read the torch' or open $out"
+    } > "$out"
+    log "torch handed off: $out"
+    echo "$out"
+}
+
+# ---------------------------------------------------------------- tell
+cmd_tell() {
+    local msg="$*"
+    [ -n "$msg" ] || { echo "usage: torch tell <message>"; exit 1; }
+    local out="$INBOX/note-$(sid).md"
+    {
+        echo "# ✉️ Note for the mage :: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo
+        echo "$msg"
+        echo
+        echo "> summon: 'read the torch'"
+    } > "$out"
+    echo "$out"
+}
+
+# ---------------------------------------------------------------- inbox/status
+cmd_inbox() {
+    echo "== torches awaiting pickup =="
+    ls -lat "$INBOX" 2>/dev/null | head -15 || echo "(empty)"
+    echo
+    echo "== archived =="
+    ls "$ARCHIVE" 2>/dev/null | wc -l
+}
+
+cmd_read() {
+    local f="$1"
+    [ -f "$INBOX/$f" ] && cat "$INBOX/$f" || { echo "not found in inbox: $f"; ls "$INBOX"; exit 1; }
+}
+
+cmd_status() {
+    echo "== torch :: $GAME_NAME (App $APPID) =="
+    echo "vault:  $ROOT"
+    echo "console: $CONSOLE ($([ -f "$CONSOLE" ] && echo live || echo missing))"
+    echo "last session: $(cat "$ROOT/state-last" 2>/dev/null || echo none)"
+    echo "current:      $(cat "$ROOT/state-current" 2>/dev/null || echo none)"
+    echo "inbox:        $(ls "$INBOX" 2>/dev/null | wc -l) torch(es)"
+    echo
+    echo "last 3 sessions:"
+    ls -dt "$SESS"/* 2>/dev/null | head -3 | while read -r s; do
+        printf "  %-22s %s\n" "$(basename "$s")" "$(cat "$s/exit.txt" 2>/dev/null | head -1)"
+    done
+    echo
+    echo "watcher service: $(systemctl --user is-active torch-watch.service 2>/dev/null || echo 'not installed')"
+}
+
+# ---------------------------------------------------------------- main
+case "${1:-}" in
+    watch)    cmd_watch ;;
+    snapshot) cmd_snapshot "${2:-snapshot}" ;;
+    replay)   cmd_replay "${2:-replay}" ;;
+    handoff)  shift; cmd_handoff "$*" ;;
+    tell)     shift; cmd_tell "$*" ;;
+    inbox)    cmd_inbox ;;
+    read)     shift; [ -n "${1:-}" ] && cmd_read "$1" || { echo "usage: torch read <file>"; exit 1; } ;;
+    status)   cmd_status ;;
+    *)        sed -n '2,16p' "$0" | sed 's/^#//'; exit 0 ;;
+esac
