@@ -148,8 +148,15 @@ Exception 0xc0000005 (EXCEPTION_ACCESS_VIOLATION)
   deterministically.
 
 This is a **develop-side bug in the game** (buffer lifetime/alignment in the
-SHA-1 call path of the managed↔native boundary). Consumer-side knobs that may
-dodge it:
+SHA-1 call path of the managed↔native boundary).
+
+**⟡ Confirmed workaround (2026-09-21):** launching from Steam in **Offline
+mode** skips the network handshake that feeds the poisoned SHA-1 path — the
+user reached a checkpoint with zero crashes after every prior online session
+ended in a silent corpse. Until the developer patches RVA `0x60E63`, play
+offline.
+
+Consumer-side knobs that may also dodge it:
 
 | Test | Rationale | How |
 |------|-----------|-----|

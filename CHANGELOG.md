@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.5] — 2026-09-21
+
+### Resolved
+- **ST-001d workaround confirmed**: Steam Offline mode lets the game reach
+  checkpoints with zero crashes (every prior online session died silently).
+  The .NET/network handshake at intro→gameplay feeds a misaligned buffer into
+  the native SHA-1 path (RVA `0x60E63`) → undispatchable `0xc0000005`. Play
+  offline until the developer patches it.
+
 ## [0.1.4] — 2026-09-21
 
 ### Added
