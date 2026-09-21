@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.2] — 2026-09-21
+
+### Added
+- `docs/BUGTRACKER.md` **ST-001c**: silent mid-game kills with **no engine crash
+  artifact** — root cause is host RAM starvation triggering NVIDIA driver
+  virtual-address-space failures (`NVRM: dmaAllocMapping_GM107: can't update VA
+  space for mapping`, `virt_mem_allocator_gm107.c:2563`), not a game bug.
+- `config/steam-pause-watcher-extended.sh`: hardened host-side memory guard that
+  pauses RAM-hungry daemons (BCH node ~1.4 GB, ollama ~0.8 GB, miners) while Steam
+  games run, and restarts them on exit. Requires `sudo -n` for system units.
+
+### Changed
+- `docs/BUGTRACKER.md` legend now includes `EXTERNAL (host)` fix scope.
+
 ## [0.1.1] — 2026-09-21
 
 ### Added
