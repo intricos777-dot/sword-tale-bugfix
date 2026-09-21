@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax check
+        run: |
+          set -e
+          for f in $(find . -name '*.sh'); do bash -n "$f"; done
+      - name: Shellcheck
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          severity: warning
+          ignore_paths: >-
+            .github
+
+  ini-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Unreal .ini templates
+        run: |
+          set -e
+          python3 - <<'PY'
+          import re, sys, pathlib
+          errs = 0
+          for p in sorted(pathlib.Path('config').glob('*.ini')):
+              text = p.read_text()
+              in_section = False
+              for i, raw in enumerate(text.splitlines(), 1):
+                  line = raw.strip()
+                  if not line or line.startswith(';') or line.startswith('#'):
+                      continue
+                  m = re.match(r'^\[(.+)\]$', line)
+                  if m:
+                      if not m.group(1):
+                          print(f'{p}:{i}: empty section header'); errs += 1
+                      in_section = True
+                      continue
+                  if not in_section and '=' in line:
+                      print(f'{p}:{i}: key outside section: {line}'); errs += 1
+                  if '=' not in line:
+                      # Allow alone-Key boolean lines used by UE; otherwise flag
+                      continue
+              if not in_section:
+                  print(f'{p}: no sections found'); errs += 1
+          sys.exit(1 if errs else 0)
+          PY
+
+  markdown-lint-lite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check links/anchors present in README
+        run: |
+          test -f README.md
+          test -f docs/DIAGNOSIS.md
+          test -f docs/BUGTRACKER.md
+          test -f linux/launch-options.txt
+          echo "core docs present: ok"

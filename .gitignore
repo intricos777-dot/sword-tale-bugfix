@@ -1,0 +1,17 @@
+# Editor cruft
+*.swp
+*~
+.DS_Store
+
+# Never commit game files or anything extracted from the game
+*.pak
+*.uasset
+*.uexp
+*.umap
+*.dmp
+CrashContext.runtime-xml
+
+# Local test scratch
+/tmp/
+*.verify.log
+swordtale-verify.log

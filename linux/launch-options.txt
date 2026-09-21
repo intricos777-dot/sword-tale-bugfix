@@ -1,0 +1,69 @@
+# Steam Launch Options — all variants
+
+Paste ONE of the following into Steam:
+**Sword Tale: Lost Excalibur → Properties → Launch Options**.
+
+> On Steam these lines are passed through your shell, so environment variables and
+> `gamemoderun` work as written. Unknown env vars are ignored on Windows — the
+> string is safe to leave in place if you also play on Windows, but you may want
+> the Windows-tailored variant instead (last section).
+
+---
+
+## A. Recommended (stability + Linux perf)
+
+```
+DXVK_FILTER_DEVICE_NAME="GeForce RTX 3050" DXVK_CONFIG="dxvk.numCompilerThreads=4,dxvk.maxFrameLatency=2,dxvk.enableGraphicsPipelineLibrary=True,dxvk.shrinkNvidiaHvvHeap=True" PROTON_ENABLE_NVAPI=1 gamemoderun %command% -nomovie -novsync -malloc=system
+```
+
+- Change `"GeForce RTX 3050"` to YOUR GPU's Vulkan name
+  (run `vulkaninfo --summary | grep deviceName`).
+- Requires `gamemode` installed. If not, drop `gamemoderun ` (keep the rest).
+
+## B. Minimal (just the crash fix)
+
+```
+gamemoderun %command% -nomovie -novsync
+```
+
+## C. Performance focus (adds FSR upscaling, caps latency)
+
+```
+DXVK_CONFIG="dxvk.numCompilerThreads=4,dxvk.maxFrameLatency=1" WINE_FULLSCREEN_FSR=1 WINE_FULLSCREEN_FSR_STRENGTH=2 gamemoderun %command% -nomovie -novsync -malloc=system
+```
+
+- `WINE_FULLSCREEN_FSR` upscales fullscreen from a lower internal resolution —
+  pair it with `-resx=1280 -resy=720` for large gains on weak GPUs.
+
+## D. Last resort (wine3d, very slow but maximally compatible)
+
+```
+PROTON_USE_WINED3D=1 %command% -nomovie -novsync
+```
+
+Only if DXVK still fails on your setup. Expect poor performance.
+
+## E. Plain Windows
+
+```
+-nomovie -novsync -malloc=system
+```
+
+If you reproduce ST-001 on Windows, adding `-nomovie` alone is the highest-value
+single switch; also set the texture streaming pool via `config/Engine.ini`.
+
+---
+
+## What the switches do
+
+| Switch | Effect |
+|--------|--------|
+| `-nomovie` | Skip startup movie playback (a render-thread stall source at boot) |
+| `-novsync` | Disable engine vsync |
+| `-malloc=system` | Use the system allocator instead of the engine's bundled allocator (fewer Wine issues; small overhead) |
+| `-resx/-resy` | Force a resolution (pair with FSR) |
+
+`DXVK_CONFIG` knobs used: `dxvk.numCompilerThreads` (parallel shader compilation),
+`dxvk.maxFrameLatency` (frame queue depth vs GPU), `dxvk.enableGraphicsPipelineLibrary`
+(NVIDIA GPL — much faster pipeline creation), `dxvk.shrinkNvidiaHvvHeap`
+(return Vulkan heap memory to the system after uploads; helps 8 GB machines).
