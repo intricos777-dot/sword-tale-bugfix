@@ -67,6 +67,16 @@ collect_forensics() {
         fi
     done
 
+    # proton/wine session log — the richest channel (captures the native
+    # access violation that the engine never reports)
+    local pty
+    for pty in "$PROTON_LOG_DIR" "$HOME"/.local/share/Steam/steamapps/common/Proton*/; do
+        [ -n "$pty" ] || continue
+        for src in "$pty"/*3305630*.log "$pty"/proton*.log "${PROTON_LOG_DIR:-/tmp/protonlog}/"*.log; do
+            [ -f "$src" ] && { cp "$src" "$dir/proton.log" 2>/dev/null && log "proton log captured from $src"; break 2; }
+        done
+    done
+
     # newest crash artifact, if any
     local crash
     crash=$(ls -dt "$GAME_SAVED"/Crashes/UE4CC-* 2>/dev/null | head -1)
@@ -131,7 +141,8 @@ cmd_watch() {
         fi
         if [[ "$line" =~ Removing.*(process|window).*for\ gameID\ $APPID ]] || [[ "$line" =~ Removing.*process.*$APPID ]]; then
             if [ -n "$cur" ]; then
-                emit_slice "$cur" "$start_line" "$line_no"
+                # live slice is already line-appended above; trim to last 400
+                tail -400 "$cur/console.slice" > "$cur/console.slice.tmp" 2>/dev/null && mv "$cur/console.slice.tmp" "$cur/console.slice"
                 finalize_session "$cur" "game exited / removed by Steam"
                 cmd_handoff "" "$cur" 2>/dev/null || true
                 cur=""

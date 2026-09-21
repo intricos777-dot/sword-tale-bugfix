@@ -112,6 +112,54 @@ the serialization, so the healing happens 5–10× faster per session. Use
 `STAY=300 tools/verify-launch.sh` to validate a full in-mission liveness window
 instead of a boot-only check.
 
+## The silent killer — ST-001d (native-access violation at gameplay entry)
+
+The **torch** capture channel finally caught the true mid-game killer red-handed.
+During a live session (2026-09-21) the Steam console showed a plain process
+removal: no engine log, no UE4CC dump — the same "vanished corpse" as every run.
+But the `PROTON_LOG` from that session (923 KB) told the truth the engine never
+could:
+
+```
+Exception 0xc0000005 (EXCEPTION_ACCESS_VIOLATION)
+  addr=0000000140060E63
+  info[0]=0000000000000000   (read),  info[1]=FFFFFFFFFFFFFFFF (invalid pointer)
+  ... exception frame is not in stack limits => unable to dispatch exception
+```
+
+- The fault is in **the game's own executable**, `SwordTale-Win64-Shipping.exe`
+  base `0x140000000`, so RVA **`0x60E63`** — near the end of `.text`.
+- Disassembly at the RIP: `0f 28 70 b8   movaps xmm6, XMMWORD PTR [rax-0x48]`
+  — a **misaligned SSE load** (AVX/SSE requires 16-byte alignment; `movaps`
+  with an unaligned address raises `#GP`, surfaced as `0xc0000005`), with `rax`
+  containing garbage.
+- The surrounding code is an **Intel SHA-NI hand-rolled block**
+  (`sha1msg1` / `sha1rnds4` / `sha1nexte` / `sha1msg2` nearby) — i.e. a
+  hand-optimized SHA-1 routine with a **misaligned input buffer pointer**.
+- The exe carries a **CLR runtime header**; the session log shows `mscoree`
+  (.NET CLR) loading 434 times, and `NETAPI32.DLL` loading immediately before
+  the fault. The logic chain: a **.NET-managed component** doing a network/
+  telemetry/Steam-handshake step at the intro→gameplay transition passes a
+  badly-aligned or dangling buffer into a native SHA-1 routine → alignment fault.
+- Because the exception frame was outside the stack limits, **the crash reporter
+  never ran**: no UE4CC directory, no log tail, no breakpad assert. That is why
+  ST-001/ST-001b investigations found zero artifacts — the killer does not go
+  through the engine at all. It also explains why no RAM/VRAM/DXVK knob fixed it
+  deterministically.
+
+This is a **develop-side bug in the game** (buffer lifetime/alignment in the
+SHA-1 call path of the managed↔native boundary). Consumer-side knobs that may
+dodge it:
+
+| Test | Rationale | How |
+|------|-----------|-----|
+| **Steam Offline mode** | Skips the network handshake/telemetry that feeds the managed SHA-1 path | Steam → Offline, then launch |
+| **Proton 11 vs Experimental** | Different `mscoree`, CLR host, and alignment behavior | Properties → Compatibility |
+| **Disable overlay/remote features** | Removes some SteamNetworking calls | Overlay settings / per-game options |
+
+If none dodge it, the only real cure is the developer fixing the buffer
+lifetime/alignment in the SHA-1 call path (reproducible at RVA `0x60E63`).
+
 ## Mitigations (what this repo changes)
 
 | Vector | Fix | Where |
@@ -137,6 +185,9 @@ Proton-compatibility tuning.
 3. Tune default streaming pool for 4 GB VRAM / 8 GB RAM systems.
 4. Add audio/text pacing options.
 5. Consider shipping a per-title DXVK-friendly pipeline library config.
+6. **ST-001d (critical):** fix the buffer lifetime/alignment at the managed↔native
+   boundary in the SHA-1 path — align the input to 16 bytes and/or use `movdqu`
+   loads; the fault is reproduceable at RVA `0x60E63`.
 
 ## Test environment (for reproducibility)
 

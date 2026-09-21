@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.4] — 2026-09-21
+
+### Added
+- **ST-001d — root cause found**. Proton-log capture via `torch` revealed a native
+  `0xc0000005` at RVA `0x60E63` (`movaps [rax-0x48]`, garbage `rax`) inside an Intel
+  SHA-NI block of the mixed-mode (native + .NET) exe, right after `mscoree` /
+  `NETAPI32` load at the intro→gameplay handoff. Exception undispatchable → no
+  engine dump/log ever. This explains every "vanished corpse" run.
+- `tools/torch`: live watch no longer overwrites the session slice with wrong
+  line ranges; proton/wine log now folded into each session automatically.
+
 ## [0.1.3] — 2026-09-21
 
 ### Added
