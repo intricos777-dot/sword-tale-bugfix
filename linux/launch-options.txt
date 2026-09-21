@@ -10,6 +10,18 @@ Paste ONE of the following into Steam:
 
 ---
 
+> **⛔ REQUIRED (ST-001d): play from Steam in OFFLINE MODE.** The game's
+> .NET/network handshake at intro→gameplay feeds a misaligned buffer into a
+> native SHA-1 routine (RVA `0x60E63`) → silent death. Launching offline skips
+> the handshake entirely — verified: reaches checkpoints with zero crashes.
+>
+> In the Steam client: Steam → Settings → Offline Mode… (or the offline
+> dropdown in the tray menu). Re-launch normally each session; Steam stays
+> offline until you switch back online. Achievements/cloud may not sync while
+> offline, but the game is fully playable.
+
+---
+
 ## A. Recommended (stability + Linux perf)
 
 ```
