@@ -62,13 +62,19 @@ not game quality.
 | Direct Proton run + SteamAppId/GameId + `-nomovie -novsync` | + DXVK device pin, GPL, 4 compiler threads | Process exits ~51–56 s, no UE log, no crash dump |
 | Steam client `steam -applaunch 3305630` | Steam env | Game windows created then torn down without a log; Steam console shows process removal |
 
-Conclusion of the A/B: **two independent failure stages exist**:
+Conclusion of the A/B: **three independent failure stages exist**:
 
 1. **Pre-engine stage** (only when launched outside Steam's full environment):
-   the process hangs in loader/VR-runtime init (OpenVR/OpenXR shims) before UE's
-   `GLog` is even opened. Always launch through Steam.
-2. **Render-thread stage** (Steam-launched, and on Windows): the UE watchdog kills
-   the game during boot-time render initialization — the reported public crash.
+   the process hangs or exits in loader/VR-runtime init (OpenVR/OpenXR shims)
+   before UE's `GLog` even opens. The game is Steamworks-linked — direct boots
+   also flail against the running Steam client IPC
+   (`IClientUtils::SetAppIDForCurrentPipe took too long`). **Always launch
+   through Steam.** This is why `verify-launch.sh` is an offline-toolbox check,
+   not the authoritative gate.
+2. **Render-thread stage, boot** (Steam-launched, and on Windows): the UE
+   watchdog kills the game during boot-time render initialization.
+3. **Render-thread stage, gameplay** (ST-001b): same watchdog, mid-mission,
+   while new area shaders compile. Covered above.
 
 ## Root-cause analysis for ST-001 (the render-thread timeout)
 
@@ -87,6 +93,24 @@ Under Proton, the render thread's startup path is busy with:
 The same triad explains Windows-side reports: UE4.18 boots that spend >30 s in
 render-thread work (cold shader caches, spinning disks, low RAM, movie playback)
 trip the identical watchdog — hence "crashes in the first minute" regardless of GPU tier.
+
+## Gameplay-phase manifestation (ST-001b)
+
+On this machine the game can boot past the intro and begin gameplay, then crash
+**while playing** — the same 30 s render-thread watchdog, struck mid-mission.
+Root cause is the same class of stall, now fired by **on-the-fly shader
+permutation compilation** when a new area/material is first rendered. UE4.18
+compiles pipeline permutations on the render thread on first use; under DXVK
+each one is a device-side pipeline build. A dense new area can pile up enough
+compilation to starve the render thread past the watchdog's 30 s limit.
+
+Practical consequence: **the game stabilizes with play**. The DXVK state cache
+(`shadercache/3305630/DXVK_state_cache`) and Steam pipeline layers grow on every
+session; areas that crashed once are cached for the next boot. `dxvk.enableGraphicsPipelineLibrary`
+(NVIDIA GPL) and `dxvk.numCompilerThreads=4` cut both the per-pipeline cost and
+the serialization, so the healing happens 5–10× faster per session. Use
+`STAY=300 tools/verify-launch.sh` to validate a full in-mission liveness window
+instead of a boot-only check.
 
 ## Mitigations (what this repo changes)
 

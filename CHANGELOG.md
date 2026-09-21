@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.1] — 2026-09-21
+
+### Added
+- `tools/verify-launch.sh` `STAY` mode: requires the game to survive N seconds
+  after the engine log appears (validates mid-game liveness, not just boot).
+- `docs/BUGTRACKER.md` ST-001b: gameplay-phase watchdog crashes (boots fine, dies
+  while playing — shader-permutation compilation stalls) with cache-warming guidance.
+
+### Changed
+- `docs/DIAGNOSIS.md`: three-stage failure model; Steamworks IPC discovery
+  (direct boots die calling `IClientUtils::SetAppIDForCurrentPipe` when Steam runs).
+
 ## [0.1.0] — 2026-09-21
 
 Initial public release.
